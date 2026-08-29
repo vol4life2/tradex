@@ -52,21 +52,10 @@ export default function TopBar({ onPositionCreated }: { onPositionCreated: (id: 
     <header className="topbar">
       <div className="topbar-inner">
         <div className="brand">
-          {/* Same glyph/coordinates as the PWA app icon (make-icons.mjs) —
-              kept as inline SVG so it stays crisp at any size instead of a
-              scaled-down raster copy of icon-512.png. */}
-          <svg className="brand-mark" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-            <rect x="4" y="4" width="92" height="92" rx="20" fill="var(--bg-elev)" stroke="var(--border)" strokeWidth="2" />
-            <polyline
-              points="24,60.4 32.32,51.37 39.6,55.89 48.96,44.28 56.24,49.44 65.6,39.12 76,28.16"
-              fill="none"
-              stroke="var(--green)"
-              strokeWidth="3.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <polygon points="76,28.16 70.68,41.03 63.43,34.15" fill="var(--green)" />
-          </svg>
+          {/* The actual PWA app icon file, not a re-approximation — guarantees
+              it's always literally the same image. BASE_URL accounts for the
+              /tradex/ prefix on GitHub Pages vs / in dev. */}
+          <img className="brand-mark" src={`${import.meta.env.BASE_URL}icons/icon-512.png`} alt="" />
           <div>
             <h1>TradeX</h1>
             <p className="subtitle">Trade Tracker</p>
