@@ -65,9 +65,18 @@ export default function PositionSnapshotModal({ onClose }: { onClose: () => void
     return map;
   }, [plans, positions]);
 
+  // Defaulting to matches[0] regardless of status used to silently pick a
+  // long-CLOSED position for a ticker that's actually back open again (a new
+  // campaign) — "update prices" on a closed position is a no-op (no leg is
+  // still open to match against), so the snapshot's real open position never
+  // got created and just looked like it vanished. Only auto-default to an
+  // existing match if it's still open; a ticker with only closed matches
+  // defaults to creating a new position instead (the user can still pick the
+  // closed one manually from the dropdown if that's really what they want).
   function defaultChoiceFor(ticker: string): string {
     const matches = matchesByTicker.get(ticker) ?? [];
-    return matches.length > 0 ? matches[0].id : NEW_CHOICE;
+    const openMatch = matches.find((p) => !computePositionMetrics(p).fullyClosed);
+    return openMatch ? openMatch.id : NEW_CHOICE;
   }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
