@@ -258,7 +258,7 @@ function PositionRow({
       <td>
         {m.fullyClosed ? <span className="chip chip-closed">CLOSED</span> : <span className="chip chip-open">OPEN</span>}
         {m.needsAttention && (
-          <span className="chip chip-warn" title="A leg was assigned, or there's stray data outside this strategy's normal ledgers — open the position for details">
+          <span className="chip chip-warn" title="A leg was assigned, an option is past expiration with no confirmed outcome, or there's stray data outside this strategy's normal ledgers — open the position for details">
             {' '}
             needs attention
           </span>

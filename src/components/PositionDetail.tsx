@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { usePositions } from '../context/PositionsContext';
 import { useConfirm } from '../context/ConfirmContext';
-import { computePositionMetrics, computeLockedInProfit } from '../lib/calc';
+import { computePositionMetrics, computeLockedInProfit, isPastExpirationUnconfirmed } from '../lib/calc';
 import { fmtMoney, fmtNum, plClass } from '../lib/format';
 import StockLotPanel from './panels/StockLotPanel';
 import LongLegPanel from './panels/LongLegPanel';
@@ -16,11 +16,15 @@ import type { CoveredCallMetrics, DiagonalMetrics, Position, PositionMetrics, Sp
 const strayLegHint =
   'It counts in the P&L math but has no panel here — check if this ticker should really be split (Split Position) or reclassified (Reclassify Strategies in the top bar), if the two don\'t actually belong together.';
 
+const staleExpirationHint =
+  'An option on this position is past its own expiration date with nothing recorded to close it (no buy-to-close, assignment, or expired entry) — its current mark doesn\'t confirm it was out of the money, so it\'s been left open rather than guessed at. If it\'s actually worthless, entering a near-zero current price below will resolve it automatically; if it was assigned or closed some other way, record that instead.';
+
 /** needsAttention is a single boolean covering a few different real causes
- *  (an actual assignment vs. stray data left over from an unrelated,
- *  possibly non-overlapping campaign on the same ticker) — check the
- *  position's real transactions rather than presupposing which one it was,
- *  so this doesn't tell the user something was assigned when it wasn't. */
+ *  (an actual assignment, an unconfirmed past-expiration leg, or stray data
+ *  left over from an unrelated, possibly non-overlapping campaign on the
+ *  same ticker) — check the position's real transactions/metrics rather
+ *  than presupposing which one it was, so this doesn't tell the user
+ *  something was assigned when it wasn't. */
 function needsAttentionMessage(m: PositionMetrics, position: Position): string {
   switch (m.strategy) {
     case 'diagonal':
@@ -28,6 +32,12 @@ function needsAttentionMessage(m: PositionMetrics, position: Position): string {
       const shortLedger = m.strategy === 'put_diagonal' ? position.putTxns : position.optionTxns;
       if (shortLedger.some((t) => t.type === 'ASSIGNED')) {
         return 'A short option on this diagonal was assigned. Remember to record how the long leg was resolved (exercised, sold, or closed) below.';
+      }
+      if (
+        isPastExpirationUnconfirmed(m.lastExpiration, m.openShortContracts, position.currentShortValue) ||
+        isPastExpirationUnconfirmed(m.lastExpiration, m.openLongContracts, position.currentLongValue)
+      ) {
+        return staleExpirationHint;
       }
       return `This position also has trades outside its long/short ledgers shown below — most likely a leftover leg from a different, unrelated campaign on this ticker. ${strayLegHint}`;
     }
@@ -37,16 +47,34 @@ function needsAttentionMessage(m: PositionMetrics, position: Position): string {
       if (shortLedger.some((t) => t.type === 'ASSIGNED')) {
         return 'A leg of this vertical was assigned. There is no stock ledger here to hold assigned shares — record what happened to them separately.';
       }
+      if (
+        isPastExpirationUnconfirmed(m.lastExpiration, m.openShortContracts, position.currentShortValue) ||
+        isPastExpirationUnconfirmed(m.lastExpiration, m.openLongContracts, position.currentLongValue)
+      ) {
+        return staleExpirationHint;
+      }
       return `This position also has trades outside the vertical ledger shown below. ${strayLegHint}`;
     }
     case 'strangle': {
       if (position.putTxns.some((t) => t.type === 'ASSIGNED') || position.optionTxns.some((t) => t.type === 'ASSIGNED')) {
         return 'A leg of this strangle was assigned. There is no stock ledger here to hold assigned shares — record what happened to them separately.';
       }
+      if (
+        isPastExpirationUnconfirmed(m.lastExpiration, m.openShortPuts, position.currentPutValue) ||
+        isPastExpirationUnconfirmed(m.lastExpiration, m.openShortCalls, position.currentShortValue)
+      ) {
+        return staleExpirationHint;
+      }
       return `This position also has trades outside the put/call ledgers shown below — most likely a leftover leg from a different, unrelated campaign on this ticker (e.g. an old closed position that predates this one). ${strayLegHint}`;
     }
     case 'covered_call':
     case 'stock':
+      if (
+        isPastExpirationUnconfirmed(m.lastExpiration, m.openShortContracts, position.currentShortValue) ||
+        isPastExpirationUnconfirmed(m.lastExpiration, m.openShortPuts, position.currentPutValue)
+      ) {
+        return staleExpirationHint;
+      }
       return `This position also has long-option trades outside its stock/put/call ledgers. ${strayLegHint}`;
     default:
       return '';

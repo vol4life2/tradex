@@ -51,9 +51,53 @@ import type {
   StockTxn,
   StrangleMetrics,
 } from '../types';
+import { todayStr } from './format';
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+// A couple of cents or less — basically already worthless. Used as the bar
+// for "confidently out of the money" below.
+export const ASSUMED_WORTHLESS_THRESHOLD = 0.02;
+
+/**
+ * Whether a leg that's still open per the raw transactions, past its own
+ * expiration, can be confidently treated as having expired worthless —
+ * without ever knowing the underlying's price ON that date. The proxy:
+ * the leg's own current mark (whatever's in the Pricing panel). A deep
+ * out-of-the-money option's premium decays toward zero as expiration
+ * nears, regardless of exactly when it's checked; an in-the-money option's
+ * premium can never drop below its intrinsic value, right up to expiration.
+ * So "the mark is basically zero" is reliable evidence specifically for the
+ * OTM case. No mark at all, or a non-trivial one, means it isn't known —
+ * `staleUnconfirmed` flags that instead of guessing, so a real ITM
+ * assignment never gets silently swallowed as "nothing happened."
+ */
+function resolveStaleExpiration(
+  openContracts: number,
+  lastExpiration: string | null,
+  mark: number | null | undefined
+): { openContracts: number; staleUnconfirmed: boolean } {
+  if (openContracts <= 0 || !lastExpiration || lastExpiration >= todayStr()) {
+    return { openContracts, staleUnconfirmed: false };
+  }
+  if (mark != null && mark <= ASSUMED_WORTHLESS_THRESHOLD) {
+    return { openContracts: 0, staleUnconfirmed: false };
+  }
+  return { openContracts, staleUnconfirmed: true };
+}
+
+/** Same check as resolveStaleExpiration, exposed standalone so the UI can
+ *  re-derive "is this specific leg the reason needsAttention is set" from
+ *  metrics fields it already has, without duplicating the threshold/date
+ *  logic (see PositionDetail.tsx's needsAttentionMessage). */
+export function isPastExpirationUnconfirmed(
+  lastExpiration: string | null,
+  openContracts: number,
+  mark: number | null | undefined
+): boolean {
+  return resolveStaleExpiration(openContracts, lastExpiration, mark).staleUnconfirmed;
 }
 
 interface Pool {
@@ -100,12 +144,14 @@ function sortStockEvents<T extends { date: string }>(events: T[], rankOf: (e: T)
 function walkLongLeg(longTxns: LongTxn[]) {
   const pool: Pool = { qty: 0, avg: 0 }; // avg = $ per CONTRACT (already includes the x100 multiplier)
   let longCashFlow = 0;
+  let lastExpiration: string | null = null;
   const events = sortByDate(longTxns || []);
   for (const ev of events) {
     if (ev.type === 'BUY') {
       const cost = ev.contracts * ev.price * 100 + (ev.fees || 0);
       addToPool(pool, ev.contracts, cost);
       longCashFlow -= cost;
+      lastExpiration = ev.expiration;
     } else if (ev.type === 'SELL') {
       const contracts = Math.min(ev.contracts, pool.qty);
       consumeFromPool(pool, contracts);
@@ -113,7 +159,7 @@ function walkLongLeg(longTxns: LongTxn[]) {
       longCashFlow += proceeds;
     }
   }
-  return { pool, longCashFlow };
+  return { pool, longCashFlow, lastExpiration };
 }
 
 /**
@@ -342,6 +388,14 @@ export function computePositionMetrics(position: Position): PositionMetrics {
     const netCallPremium = round2(shortLeg.premiumNet);
     const netPremiumCollected = round2(netPutPremium + netCallPremium);
 
+    // A short leg still open past its own expiration, with no BTC/EXPIRED/
+    // ASSIGNED recorded yet, gets treated as expired worthless ONLY when its
+    // current mark confirms it was out of the money — otherwise it stays
+    // open and needsAttention flags it instead of guessing (see
+    // resolveStaleExpiration's doc comment).
+    const callStale = resolveStaleExpiration(shortLeg.openContracts, shortLeg.lastExpiration, position.currentShortValue);
+    const putStale = resolveStaleExpiration(putLeg.openContracts, putLeg.lastExpiration, position.currentPutValue);
+
     // "Open" while anything is live: shares, short or long options on either leg.
     const hasTxns =
       (position.stockTxns || []).length > 0 ||
@@ -350,9 +404,9 @@ export function computePositionMetrics(position: Position): PositionMetrics {
       putTxnsSorted.length > 0;
     const isOpen =
       sharesHeld > 0 ||
-      putLeg.openContracts > 0 ||
+      putStale.openContracts > 0 ||
       putLeg.openLongContracts > 0 ||
-      shortLeg.openContracts > 0 ||
+      callStale.openContracts > 0 ||
       shortLeg.openLongContracts > 0 ||
       longLeg.pool.qty > 0;
     const fullyClosed = !isOpen && hasTxns;
@@ -379,12 +433,12 @@ export function computePositionMetrics(position: Position): PositionMetrics {
     let unrealizedPL: number | null = null;
     if (isOpen && hasNeededMark) {
       const callLiability =
-        shortLeg.openContracts > 0 && position.currentShortValue != null
-          ? shortLeg.openContracts * 100 * position.currentShortValue
+        callStale.openContracts > 0 && position.currentShortValue != null
+          ? callStale.openContracts * 100 * position.currentShortValue
           : 0;
       const putLiability =
-        putLeg.openContracts > 0 && position.currentPutValue != null
-          ? putLeg.openContracts * 100 * position.currentPutValue
+        putStale.openContracts > 0 && position.currentPutValue != null
+          ? putStale.openContracts * 100 * position.currentPutValue
           : 0;
       const stockGain =
         sharesHeld > 0 && position.currentPrice != null
@@ -408,13 +462,13 @@ export function computePositionMetrics(position: Position): PositionMetrics {
       effectiveCostBasisPerShare,
       breakevenPrice,
       effectiveCostBasisTotal,
-      openShortPuts: putLeg.openContracts,
-      openShortContracts: shortLeg.openContracts,
+      openShortPuts: putStale.openContracts,
+      openShortContracts: callStale.openContracts,
       lastExpiration,
       realizedPL,
       unrealizedPL,
       fullyClosed,
-      needsAttention: (position.longTxns || []).length > 0,
+      needsAttention: (position.longTxns || []).length > 0 || callStale.staleUnconfirmed || putStale.staleUnconfirmed,
     };
     return metrics;
   }
@@ -428,20 +482,26 @@ export function computePositionMetrics(position: Position): PositionMetrics {
     const leg = walkCashLeg(txns, optionKind === 'P' ? 'put' : 'call');
     const stray = strayLedgerImpact(position, new Set<Ledger>([optionKind === 'P' ? 'put' : 'call']));
 
-    const isOpen = leg.openShort > 0 || leg.openLong > 0 || stray.stillOpen;
+    // Both legs of a vertical share the same expiration by definition, so
+    // leg.lastExpiration (tracked off the short side) applies to the long
+    // side too.
+    const shortStale = resolveStaleExpiration(leg.openShort, leg.lastExpiration, position.currentShortValue);
+    const longStale = resolveStaleExpiration(leg.openLong, leg.lastExpiration, position.currentLongValue);
+
+    const isOpen = shortStale.openContracts > 0 || longStale.openContracts > 0 || stray.stillOpen;
     const fullyClosed = !isOpen && (txns.length > 0 || stray.hasAny);
     const netPremiumCollected = round2(leg.cashFlow);
     const realizedPL = fullyClosed ? round2(leg.cashFlow + stray.cashFlow) : null;
 
     let unrealizedPL: number | null = null;
-    if (leg.openShort > 0 || leg.openLong > 0) {
-      const needShortMark = leg.openShort > 0;
-      const needLongMark = leg.openLong > 0;
+    if (shortStale.openContracts > 0 || longStale.openContracts > 0) {
+      const needShortMark = shortStale.openContracts > 0;
+      const needLongMark = longStale.openContracts > 0;
       const hasShortMark = !needShortMark || position.currentShortValue != null;
       const hasLongMark = !needLongMark || position.currentLongValue != null;
       if (hasShortMark && hasLongMark) {
-        const shortLiability = needShortMark ? leg.openShort * 100 * (position.currentShortValue as number) : 0;
-        const longValue = needLongMark ? leg.openLong * 100 * (position.currentLongValue as number) : 0;
+        const shortLiability = needShortMark ? shortStale.openContracts * 100 * (position.currentShortValue as number) : 0;
+        const longValue = needLongMark ? longStale.openContracts * 100 * (position.currentLongValue as number) : 0;
         unrealizedPL = round2(netPremiumCollected - shortLiability + longValue);
       }
     }
@@ -450,14 +510,14 @@ export function computePositionMetrics(position: Position): PositionMetrics {
       strategy: position.strategy,
       optionKind,
       isOpen,
-      openShortContracts: leg.openShort,
-      openLongContracts: leg.openLong,
+      openShortContracts: shortStale.openContracts,
+      openLongContracts: longStale.openContracts,
       netPremiumCollected,
       lastExpiration: leg.lastExpiration,
       realizedPL,
       unrealizedPL,
       fullyClosed,
-      needsAttention: leg.hadAssignment || stray.hasAny,
+      needsAttention: leg.hadAssignment || stray.hasAny || shortStale.staleUnconfirmed || longStale.staleUnconfirmed,
     };
     return metrics;
   }
@@ -468,9 +528,15 @@ export function computePositionMetrics(position: Position): PositionMetrics {
     const callLeg = walkCashLeg(optionTxnsSorted, 'call');
     const stray = strayLedgerImpact(position, new Set<Ledger>(['call', 'put']));
 
+    // Only the short sides get the stale-expiration treatment — a stray long
+    // leg here would mean this is really a 4-leg structure (iron condor/fly,
+    // see below), which is already its own flagged edge case.
+    const putStale = resolveStaleExpiration(putLeg.openShort, putLeg.lastExpiration, position.currentPutValue);
+    const callStale = resolveStaleExpiration(callLeg.openShort, callLeg.lastExpiration, position.currentShortValue);
+
     const hasTxns = putTxnsSorted.length > 0 || optionTxnsSorted.length > 0 || stray.hasAny;
     const isOpen =
-      putLeg.openShort > 0 || putLeg.openLong > 0 || callLeg.openShort > 0 || callLeg.openLong > 0 || stray.stillOpen;
+      putStale.openContracts > 0 || putLeg.openLong > 0 || callStale.openContracts > 0 || callLeg.openLong > 0 || stray.stillOpen;
     const fullyClosed = !isOpen && hasTxns;
     const netPutPremium = round2(putLeg.cashFlow);
     const netCallPremium = round2(callLeg.cashFlow);
@@ -478,18 +544,18 @@ export function computePositionMetrics(position: Position): PositionMetrics {
     const realizedPL = fullyClosed ? round2(netPremiumCollected + stray.cashFlow) : null;
 
     let unrealizedPL: number | null = null;
-    if (!stray.stillOpen && (putLeg.openShort > 0 || putLeg.openLong > 0 || callLeg.openShort > 0 || callLeg.openLong > 0)) {
+    if (!stray.stillOpen && (putStale.openContracts > 0 || putLeg.openLong > 0 || callStale.openContracts > 0 || callLeg.openLong > 0)) {
       // Long legs here would mean this is really a 4-leg structure (iron
       // condor/fly) — needsAttention/warnings already flag that case at
       // import time; we just decline to guess an unrealized mark for it.
       const hasUnmarkableLongLegs = putLeg.openLong > 0 || callLeg.openLong > 0;
-      const needPutMark = putLeg.openShort > 0;
-      const needCallMark = callLeg.openShort > 0;
+      const needPutMark = putStale.openContracts > 0;
+      const needCallMark = callStale.openContracts > 0;
       const hasPutMark = !needPutMark || position.currentPutValue != null;
       const hasCallMark = !needCallMark || position.currentShortValue != null;
       if (!hasUnmarkableLongLegs && hasPutMark && hasCallMark) {
-        const putLiability = needPutMark ? putLeg.openShort * 100 * (position.currentPutValue as number) : 0;
-        const callLiability = needCallMark ? callLeg.openShort * 100 * (position.currentShortValue as number) : 0;
+        const putLiability = needPutMark ? putStale.openContracts * 100 * (position.currentPutValue as number) : 0;
+        const callLiability = needCallMark ? callStale.openContracts * 100 * (position.currentShortValue as number) : 0;
         unrealizedPL = round2(netPremiumCollected - putLiability - callLiability);
       }
     }
@@ -500,8 +566,8 @@ export function computePositionMetrics(position: Position): PositionMetrics {
     const metrics: StrangleMetrics = {
       strategy: 'strangle',
       isOpen,
-      openShortPuts: putLeg.openShort,
-      openShortCalls: callLeg.openShort,
+      openShortPuts: putStale.openContracts,
+      openShortCalls: callStale.openContracts,
       netPutPremium,
       netCallPremium,
       netPremiumCollected,
@@ -509,7 +575,7 @@ export function computePositionMetrics(position: Position): PositionMetrics {
       realizedPL,
       unrealizedPL,
       fullyClosed,
-      needsAttention: putLeg.hadAssignment || callLeg.hadAssignment || stray.hasAny,
+      needsAttention: putLeg.hadAssignment || callLeg.hadAssignment || stray.hasAny || putStale.staleUnconfirmed || callStale.staleUnconfirmed,
     };
     return metrics;
   }
@@ -529,11 +595,10 @@ export function computePositionMetrics(position: Position): PositionMetrics {
   const primaryLong = allLong.filter((t) => (t.kind ?? 'C') === diagKind);
   const otherLong = allLong.filter((t) => (t.kind ?? 'C') !== diagKind);
 
-  const { pool, longCashFlow } = walkLongLeg(primaryLong);
+  const { pool, longCashFlow, lastExpiration: longLastExpiration } = walkLongLeg(primaryLong);
   const openLongContracts = round2(pool.qty);
   const avgLongCostPerContract = pool.avg; // $ per contract (already x100)
   const avgLongCost = avgLongCostPerContract / 100; // $ per share, for display/comparison to quotes
-  const longCostBasisTotal = round2(openLongContracts * avgLongCostPerContract);
   const netPremiumCollected = round2(diagShortLeg.premiumNet);
 
   const stray = strayLedgerImpact(position, new Set<Ledger>(['long', isPutDiagonal ? 'put' : 'call']));
@@ -548,13 +613,20 @@ export function computePositionMetrics(position: Position): PositionMetrics {
     if (otherLeg.pool.qty > 0) stray.stillOpen = true;
   }
 
+  // A leg still open past its own expiration, with nothing recorded to
+  // close it, is only assumed expired worthless when its own current mark
+  // confirms it was out of the money — see resolveStaleExpiration.
+  const shortStale = resolveStaleExpiration(diagShortLeg.openContracts, diagShortLeg.lastExpiration, position.currentShortValue);
+  const longStale = resolveStaleExpiration(openLongContracts, longLastExpiration, position.currentLongValue);
+  const longCostBasisTotal = round2(longStale.openContracts * avgLongCostPerContract);
+
   const isOpen =
-    openLongContracts > 0 || diagShortLeg.openContracts > 0 || diagShortLeg.openLongContracts > 0 || stray.stillOpen;
+    longStale.openContracts > 0 || shortStale.openContracts > 0 || diagShortLeg.openLongContracts > 0 || stray.stillOpen;
   let effectiveCostBasisPerContract: number | null = null;
   let effectiveCostBasisTotal: number | null = null;
-  if (openLongContracts > 0) {
+  if (longStale.openContracts > 0) {
     effectiveCostBasisTotal = round2(longCostBasisTotal - netPremiumCollected);
-    effectiveCostBasisPerContract = round2(effectiveCostBasisTotal / openLongContracts);
+    effectiveCostBasisPerContract = round2(effectiveCostBasisTotal / longStale.openContracts);
   }
 
   const fullyClosed = !isOpen && (allLong.length > 0 || diagShortLedgerTxns.length > 0 || stray.hasAny);
@@ -564,13 +636,13 @@ export function computePositionMetrics(position: Position): PositionMetrics {
   const realizedPL = fullyClosed ? totalCashFlow : null;
 
   let unrealizedPL: number | null = null;
-  if (openLongContracts > 0 && position.currentLongValue != null) {
+  if (longStale.openContracts > 0 && position.currentLongValue != null) {
     const shortLiability =
-      diagShortLeg.openContracts > 0 && position.currentShortValue != null
-        ? diagShortLeg.openContracts * 100 * position.currentShortValue
+      shortStale.openContracts > 0 && position.currentShortValue != null
+        ? shortStale.openContracts * 100 * position.currentShortValue
         : 0;
     unrealizedPL = round2(
-      (position.currentLongValue - avgLongCost) * openLongContracts * 100 +
+      (position.currentLongValue - avgLongCost) * longStale.openContracts * 100 +
         netPremiumCollected -
         shortLiability
     );
@@ -579,14 +651,14 @@ export function computePositionMetrics(position: Position): PositionMetrics {
   const metrics: DiagonalMetrics = {
     strategy: isPutDiagonal ? 'put_diagonal' : 'diagonal',
     isOpen,
-    openLongContracts,
+    openLongContracts: longStale.openContracts,
     avgLongCost: round2(avgLongCost),
     longCostBasisTotal,
     netPremiumCollected,
     effectiveCostBasisPerContract,
     effectiveCostBasisTotal,
-    openShortContracts: diagShortLeg.openContracts,
-    assignmentProceedsPending: diagShortLeg.openContracts === 0 ? diagShortLeg.assignmentProceeds : null,
+    openShortContracts: shortStale.openContracts,
+    assignmentProceedsPending: shortStale.openContracts === 0 ? diagShortLeg.assignmentProceeds : null,
     lastExpiration: diagShortLeg.lastExpiration,
     realizedPL,
     unrealizedPL,
@@ -595,7 +667,9 @@ export function computePositionMetrics(position: Position): PositionMetrics {
       (diagShortLeg.assignmentProceeds !== 0 &&
         openLongContracts > 0 &&
         diagShortLedgerTxns.some((t) => t.type === 'ASSIGNED')) ||
-      stray.hasAny,
+      stray.hasAny ||
+      shortStale.staleUnconfirmed ||
+      longStale.staleUnconfirmed,
   };
   return metrics;
 }
