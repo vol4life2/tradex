@@ -31,6 +31,17 @@ export interface LongTxn {
    *  before put diagonals existed — every long leg back then was a call, so
    *  a missing kind always means 'C'. */
   kind?: 'C' | 'P';
+  /** Marks this BUY as the start of the diagonal's CURRENTLY active long-leg
+   *  episode — the fix for the multi-episode sharp edge (see
+   *  tradex-anchor-leg-idea memory / calc.ts's diagonal branch): a diagonal
+   *  whose long leg was fully closed and rebought under the same Position
+   *  would otherwise blend the new episode's breakeven math with premium
+   *  collected against the OLD long leg. Set on a BUY row via LongLegPanel's
+   *  anchor toggle (PositionsContext.setLongAnchor keeps it exclusive — at
+   *  most one BUY per kind carries it). Only ever meaningful on a BUY;
+   *  absent entirely on SELL rows and on any position that's never needed
+   *  one. */
+  isAnchor?: boolean;
 }
 
 /**

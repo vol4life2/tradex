@@ -169,6 +169,11 @@ p { margin: 0; }
 .chip-sell { background: rgba(53, 201, 143, 0.15); color: var(--green); }
 .chip-muted { background: rgba(154, 165, 192, 0.15); color: var(--text-dim); }
 .chip-warn { background: rgba(232, 162, 61, 0.18); color: var(--amber); }
+.chip-anchor {
+  background: rgba(91, 140, 255, 0.18); color: var(--accent);
+  border: none; cursor: pointer; font-family: inherit;
+}
+.chip-anchor:hover { background: rgba(91, 140, 255, 0.28); }
 
 /* ---------- detail view ---------- */
 .detail-header { margin-bottom: 16px; }

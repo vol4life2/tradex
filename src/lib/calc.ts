@@ -599,7 +599,26 @@ export function computePositionMetrics(position: Position): PositionMetrics {
   const openLongContracts = round2(pool.qty);
   const avgLongCostPerContract = pool.avg; // $ per contract (already x100)
   const avgLongCost = avgLongCostPerContract / 100; // $ per share, for display/comparison to quotes
-  const netPremiumCollected = round2(diagShortLeg.premiumNet);
+
+  // Anchor: the BUY marking the start of the CURRENTLY active long-leg
+  // episode (see tradex-anchor-leg-idea memory / LongTxn.isAnchor's doc
+  // comment). walkLongLeg's own pool already self-resets cleanly across a
+  // fully-closed-then-reopened episode (a 1-lot SELL zeroes it out, so the
+  // next BUY blends against zero) — the real bleed was always here: short-
+  // leg premium collected against an OLD, already-closed long leg has
+  // nothing to do with what's backing the long leg TODAY, but a plain
+  // all-history sum doesn't know that. When an anchor is set, everything
+  // "current" (breakeven, unrealized P&L, open short count, next
+  // expiration) is scoped to short-leg activity from the anchor's date
+  // forward. `diagShortLeg` (full history) deliberately keeps being used for
+  // totalCashFlow/realizedPL below — a prior episode's already-realized
+  // profit should still count toward the position's lifetime total, just
+  // not bleed into the still-open episode's basis math.
+  const anchorTxn = primaryLong.find((t) => t.type === 'BUY' && t.isAnchor);
+  const diagShortLegEpisode = anchorTxn
+    ? walkShortLeg(diagShortTxnsSorted.filter((t) => t.date >= anchorTxn.date))
+    : diagShortLeg;
+  const netPremiumCollected = round2(diagShortLegEpisode.premiumNet);
 
   const stray = strayLedgerImpact(position, new Set<Ledger>(['long', isPutDiagonal ? 'put' : 'call']));
   if (otherLong.length > 0) {
@@ -616,12 +635,12 @@ export function computePositionMetrics(position: Position): PositionMetrics {
   // A leg still open past its own expiration, with nothing recorded to
   // close it, is only assumed expired worthless when its own current mark
   // confirms it was out of the money — see resolveStaleExpiration.
-  const shortStale = resolveStaleExpiration(diagShortLeg.openContracts, diagShortLeg.lastExpiration, position.currentShortValue);
+  const shortStale = resolveStaleExpiration(diagShortLegEpisode.openContracts, diagShortLegEpisode.lastExpiration, position.currentShortValue);
   const longStale = resolveStaleExpiration(openLongContracts, longLastExpiration, position.currentLongValue);
   const longCostBasisTotal = round2(longStale.openContracts * avgLongCostPerContract);
 
   const isOpen =
-    longStale.openContracts > 0 || shortStale.openContracts > 0 || diagShortLeg.openLongContracts > 0 || stray.stillOpen;
+    longStale.openContracts > 0 || shortStale.openContracts > 0 || diagShortLegEpisode.openLongContracts > 0 || stray.stillOpen;
   let effectiveCostBasisPerContract: number | null = null;
   let effectiveCostBasisTotal: number | null = null;
   if (longStale.openContracts > 0) {
@@ -658,13 +677,13 @@ export function computePositionMetrics(position: Position): PositionMetrics {
     effectiveCostBasisPerContract,
     effectiveCostBasisTotal,
     openShortContracts: shortStale.openContracts,
-    assignmentProceedsPending: shortStale.openContracts === 0 ? diagShortLeg.assignmentProceeds : null,
-    lastExpiration: diagShortLeg.lastExpiration,
+    assignmentProceedsPending: shortStale.openContracts === 0 ? diagShortLegEpisode.assignmentProceeds : null,
+    lastExpiration: diagShortLegEpisode.lastExpiration,
     realizedPL,
     unrealizedPL,
     fullyClosed,
     needsAttention:
-      (diagShortLeg.assignmentProceeds !== 0 &&
+      (diagShortLegEpisode.assignmentProceeds !== 0 &&
         openLongContracts > 0 &&
         diagShortLedgerTxns.some((t) => t.type === 'ASSIGNED')) ||
       stray.hasAny ||
@@ -779,6 +798,12 @@ function diagonalHistory(position: Position, kind: 'C' | 'P'): CostBasisHistoryR
     a.txn.date < b.txn.date ? -1 : a.txn.date > b.txn.date ? 1 : rankOf(a) - rankOf(b)
   );
 
+  // Same anchor concept as computePositionMetrics's diagonal branch: the BUY
+  // marked isAnchor starts the currently active episode, so premium
+  // collected before it belongs to already-closed history and shouldn't
+  // keep bleeding into this running basis column past that point.
+  const anchorTxn = primaryLong.find((t) => t.type === 'BUY' && t.isAnchor);
+
   const pool: Pool = { qty: 0, avg: 0 }; // avg = $/contract (x100), matching walkLongLeg
   let cumulativePremium = 0;
   const rows: CostBasisHistoryRow[] = [];
@@ -792,6 +817,7 @@ function diagonalHistory(position: Position, kind: 'C' | 'P'): CostBasisHistoryR
       addToPool(pool, ev.txn.contracts, cost);
       cashFlow = -cost;
       event = `Bought ${ev.txn.contracts} long ${legWord}, $${ev.txn.strike} strike, exp ${ev.txn.expiration}, @ $${ev.txn.price.toFixed(2)}`;
+      if (anchorTxn && ev.txn.id === anchorTxn.id) cumulativePremium = 0;
     } else if (ev.src === 'long' && ev.txn.type === 'SELL') {
       consumeFromPool(pool, Math.min(ev.txn.contracts, pool.qty));
       cashFlow = ev.txn.contracts * ev.txn.price * 100 - (ev.txn.fees || 0);

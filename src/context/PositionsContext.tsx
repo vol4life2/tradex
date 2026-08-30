@@ -70,6 +70,11 @@ interface PositionsContextValue {
   /** Clears a manual rename and immediately regenerates "TICKER — Strategy
    *  (start date)" from the position's current data. */
   resetNameToAuto: (positionId: string) => void;
+  /** Marks the long-leg BUY `txnId` as the diagonal's anchor (start of the
+   *  currently active episode) for the given kind, clearing any other BUY of
+   *  that kind that had it — or clears the anchor entirely when `txnId` is
+   *  null. See LongTxn.isAnchor's doc comment. */
+  setLongAnchor: (positionId: string, txnId: string | null, kind: 'C' | 'P') => void;
   setAllPositions: (positions: Position[]) => void;
   applyImport: (
     plans: TickerPlan[],
@@ -247,6 +252,26 @@ export function PositionsProvider({ children }: { children: ReactNode }) {
   const resetNameToAuto = useCallback((positionId: string) => {
     setPositions((prev) =>
       prev.map((p) => (p.id === positionId ? { ...p, name: autoPositionName({ ...p, nameOverride: false }), nameOverride: false } : p))
+    );
+  }, []);
+
+  // Marks (or clears) which long-leg BUY starts the diagonal's currently
+  // active episode — see LongTxn.isAnchor's doc comment. At most one BUY per
+  // kind carries the flag, so setting a new anchor clears any other; passing
+  // txnId=null clears without setting a new one. Single atomic update
+  // (rather than a generic updateTxn call per row) so the "only one anchor"
+  // invariant can't be broken by two separate calls racing.
+  const setLongAnchor = useCallback((positionId: string, txnId: string | null, kind: 'C' | 'P') => {
+    setPositions((prev) =>
+      prev.map((p) => {
+        if (p.id !== positionId) return p;
+        return {
+          ...p,
+          longTxns: p.longTxns.map((t) =>
+            (t.kind ?? 'C') === kind ? { ...t, isAnchor: t.id === txnId } : t
+          ),
+        };
+      })
     );
   }, []);
 
@@ -479,6 +504,7 @@ export function PositionsProvider({ children }: { children: ReactNode }) {
       resetStrategyToAuto,
       setName,
       resetNameToAuto,
+      setLongAnchor,
       setAllPositions,
       applyImport,
       reclassifyAll,
@@ -500,6 +526,7 @@ export function PositionsProvider({ children }: { children: ReactNode }) {
       resetStrategyToAuto,
       setName,
       resetNameToAuto,
+      setLongAnchor,
       setAllPositions,
       applyImport,
       reclassifyAll,

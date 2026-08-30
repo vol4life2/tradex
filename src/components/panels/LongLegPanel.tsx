@@ -23,7 +23,7 @@ interface Draft {
 }
 
 export default function LongLegPanel({ position, kind = 'C' }: { position: Position; kind?: 'C' | 'P' }) {
-  const { addLongTxn, updateTxn, deleteTxn } = usePositions();
+  const { addLongTxn, updateTxn, deleteTxn, setLongAnchor } = usePositions();
   const confirm = useConfirm();
   const [type, setType] = useState<'BUY' | 'SELL'>('BUY');
   const [date, setDate] = useState(todayStr());
@@ -99,6 +99,7 @@ export default function LongLegPanel({ position, kind = 'C' }: { position: Posit
   }
 
   const legLabel = kind === 'P' ? 'Put' : 'Call';
+  const buyCount = txns.filter((t) => t.type === 'BUY').length;
 
   return (
     <div className="panel">
@@ -106,12 +107,21 @@ export default function LongLegPanel({ position, kind = 'C' }: { position: Posit
       {txns.length === 0 ? (
         <p className="hint">No long {legLabel.toLowerCase()} transactions yet.</p>
       ) : (
+        <>
+        {buyCount > 1 && (
+          <p className="hint">
+            Multiple long-{legLabel.toLowerCase()} buys — if this is really several separate episodes (the old one
+            fully closed before the new one opened), mark the current episode's BUY as the anchor so premium
+            collected before it stops bleeding into this episode's breakeven.
+          </p>
+        )}
         <div className="table-scroll">
         <table className="table">
           <thead>
             <tr>
               <th>Date</th>
               <th>Type</th>
+              {buyCount > 1 && <th>Anchor</th>}
               <th>Contracts</th>
               <th>Strike</th>
               <th>Expiration</th>
@@ -144,6 +154,7 @@ export default function LongLegPanel({ position, kind = 'C' }: { position: Posit
                       <option value="SELL">Sell</option>
                     </select>
                   </td>
+                  {buyCount > 1 && <td className="hint">save first</td>}
                   <td>
                     <input
                       type="number"
@@ -225,6 +236,28 @@ export default function LongLegPanel({ position, kind = 'C' }: { position: Posit
                   <td>
                     <span className={`chip ${t.type === 'BUY' ? 'chip-buy' : 'chip-sell'}`}>{t.type}</span>
                   </td>
+                  {buyCount > 1 && (
+                    <td>
+                      {t.type === 'BUY' &&
+                        (t.isAnchor ? (
+                          <button
+                            className="chip chip-anchor"
+                            title="This BUY marks the start of the currently active episode. Click to clear."
+                            onClick={() => setLongAnchor(position.id, null, kind)}
+                          >
+                            ⚓ Anchor
+                          </button>
+                        ) : (
+                          <button
+                            className="btn btn-ghost btn-icon"
+                            title="Mark this BUY as the start of the currently active episode — short-leg premium collected before it stops counting toward this episode's breakeven."
+                            onClick={() => setLongAnchor(position.id, t.id, kind)}
+                          >
+                            Set anchor
+                          </button>
+                        ))}
+                    </td>
+                  )}
                   <td>{fmtNum(t.contracts)}</td>
                   <td>{fmtMoney(t.strike)}</td>
                   <td>{fmtDate(t.expiration)}</td>
@@ -254,6 +287,7 @@ export default function LongLegPanel({ position, kind = 'C' }: { position: Posit
           </tbody>
         </table>
         </div>
+        </>
       )}
 
       <form className="txn-form" onSubmit={handleSubmit}>
