@@ -164,10 +164,10 @@ export default function TopBar({
                   setShowMenu(false);
                 }}
               >
-                Export
+                Export Backup
               </button>
               <label className="btn btn-ghost" title="Restore from a JSON backup file">
-                Import
+                Import Backup
                 <input
                   ref={fileInputRef}
                   type="file"
