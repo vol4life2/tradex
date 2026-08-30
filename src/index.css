@@ -48,7 +48,36 @@ p { margin: 0; }
 .brand-mark { width: 34px; height: 34px; flex-shrink: 0; border-radius: 8px; object-fit: cover; }
 .brand h1 { font-size: 17px; }
 .subtitle { font-size: 12.5px; color: var(--text-dim); margin-top: 2px; }
-.topbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.topbar-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.header-select {
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  border-radius: 7px; padding: 8px 10px; font-size: 13px; font-family: inherit; font-weight: 500;
+}
+.header-select:focus { outline: none; border-color: var(--accent); }
+.hamburger-btn { font-size: 16px; padding: 8px 11px; }
+
+.drawer-backdrop {
+  position: fixed; inset: 0; background: rgba(5, 8, 14, 0.6); z-index: 90;
+  animation: drawer-fade-in 0.15s ease;
+}
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 91;
+  width: 260px; max-width: 82vw;
+  background: var(--bg-elev); border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.4);
+  padding: 16px; display: flex; flex-direction: column; gap: 8px;
+  animation: drawer-slide-in 0.2s ease;
+}
+.drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px; font-size: 13px; font-weight: 650; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.drawer .btn { width: 100%; justify-content: flex-start; }
+@keyframes drawer-slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes drawer-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.dashboard-toolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 
 /* ---------- buttons ---------- */
 .btn {
@@ -118,8 +147,6 @@ p { margin: 0; }
   display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 14px;
   background: var(--bg-elev-2); border: 1px solid var(--accent-dim); border-radius: 8px; font-size: 13px;
 }
-.account-filter-row { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-.account-filter-row .field { flex: 0 0 auto; min-width: 180px; margin-bottom: 0; }
 .ticker-cell { font-weight: 650; letter-spacing: 0.01em; }
 .position-name-subtitle { font-size: 11px; font-weight: 400; color: var(--text-faint); letter-spacing: normal; margin-top: 2px; }
 .account-tag {

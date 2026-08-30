@@ -1,33 +1,38 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { usePositions } from '../context/PositionsContext';
 import { useConfirm } from '../context/ConfirmContext';
 import { useToast } from '../context/ToastContext';
 import { computePositionMetrics } from '../lib/calc';
 import { fmtMoney, fmtNum, plClass } from '../lib/format';
 import { positionStrategyLabel } from '../lib/strategyLabel';
-import type { Position } from '../types';
+import { ALL_ACCOUNTS, NO_ACCOUNT, type StatusFilter } from '../lib/filters';
+import NewPositionModal from './NewPositionModal';
+import type { Position, Strategy } from '../types';
 
-const ALL_ACCOUNTS = 'all';
-const NO_ACCOUNT = '(no account)';
-type StatusFilter = 'all' | 'open' | 'closed';
-
-export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: string) => void }) {
-  const { positions, deletePosition, deletePositions } = usePositions();
+export default function Dashboard({
+  onOpenPosition,
+  accountFilter,
+  statusFilter,
+}: {
+  onOpenPosition: (id: string) => void;
+  accountFilter: string;
+  statusFilter: StatusFilter;
+}) {
+  const { positions, addPosition, deletePosition, deletePositions } = usePositions();
   const confirm = useConfirm();
   const { toast } = useToast();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [accountFilter, setAccountFilter] = useState<string>(ALL_ACCOUNTS);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [showNew, setShowNew] = useState(false);
 
-  // Distinct accounts seen across all positions, for the filter dropdown.
-  const accounts = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of positions) set.add(p.account ?? NO_ACCOUNT);
-    return [...set].sort();
-  }, [positions]);
+  function handleCreate(ticker: string, strategy: Strategy, notes: string) {
+    const p = addPosition(ticker, strategy, notes);
+    setShowNew(false);
+    onOpenPosition(p.id);
+  }
 
-  // Positions the filters narrow down to — everything below (totals, table,
-  // select-all) works off this instead of the raw `positions` list.
+  // Positions the filters (owned by TopBar, since that's where the selects
+  // now live) narrow down to — everything below (totals, table, select-all)
+  // works off this instead of the raw `positions` list.
   const visiblePositions = useMemo(() => {
     return positions.filter((p) => {
       if (accountFilter !== ALL_ACCOUNTS && (p.account ?? NO_ACCOUNT) !== accountFilter) return false;
@@ -39,14 +44,6 @@ export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: str
       return true;
     });
   }, [positions, accountFilter, statusFilter]);
-
-  // Reset to "All Accounts" if the selected account no longer exists (e.g.
-  // its last position got deleted) rather than silently showing zero rows.
-  useEffect(() => {
-    if (accountFilter !== ALL_ACCOUNTS && !accounts.includes(accountFilter)) {
-      setAccountFilter(ALL_ACCOUNTS);
-    }
-  }, [accountFilter, accounts]);
 
   const summary = useMemo(() => {
     let netPremium = 0,
@@ -121,31 +118,6 @@ export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: str
 
   return (
     <>
-      {positions.length > 0 && (
-        <div className="account-filter-row">
-          {accounts.length > 1 && (
-            <label className="field">
-              <span>Account</span>
-              <select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}>
-                <option value={ALL_ACCOUNTS}>All Accounts</option>
-                {accounts.map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label className="field">
-            <span>Status</span>
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}>
-              <option value="all">All</option>
-              <option value="open">Open Only</option>
-              <option value="closed">Closed Only</option>
-            </select>
-          </label>
-        </div>
-      )}
       <div className="summary-grid">
         <div className="summary-card">
           <div className="summary-label">Open Positions</div>
@@ -163,6 +135,12 @@ export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: str
           <div className="summary-label">Realized P&amp;L ({summary.closedCount} closed)</div>
           <div className={`summary-value ${plClass(summary.realized)}`}>{fmtMoney(summary.realized)}</div>
         </div>
+      </div>
+
+      <div className="dashboard-toolbar">
+        <button className="btn btn-primary" onClick={() => setShowNew(true)}>
+          + New Position
+        </button>
       </div>
 
       {positions.length === 0 ? (
@@ -219,6 +197,7 @@ export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: str
           </div>
         </>
       )}
+      {showNew && <NewPositionModal onClose={() => setShowNew(false)} onCreate={handleCreate} />}
     </>
   );
 }

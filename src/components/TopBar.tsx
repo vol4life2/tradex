@@ -1,25 +1,55 @@
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { usePositions } from '../context/PositionsContext';
 import { useToast } from '../context/ToastContext';
 import { useConfirm } from '../context/ConfirmContext';
 import { exportToFile, importFromFile } from '../lib/storage';
-import NewPositionModal from './NewPositionModal';
+import { ALL_ACCOUNTS, NO_ACCOUNT, type StatusFilter } from '../lib/filters';
 import ImportCsvModal from './ImportCsvModal';
-import type { Strategy } from '../types';
 
-export default function TopBar({ onPositionCreated }: { onPositionCreated: (id: string) => void }) {
-  const { positions, addPosition, setAllPositions, reclassifyAll } = usePositions();
+export default function TopBar({
+  accountFilter,
+  setAccountFilter,
+  statusFilter,
+  setStatusFilter,
+  showFilters,
+}: {
+  accountFilter: string;
+  setAccountFilter: (v: string) => void;
+  statusFilter: StatusFilter;
+  setStatusFilter: (v: StatusFilter) => void;
+  showFilters: boolean;
+}) {
+  const { positions, setAllPositions, reclassifyAll } = usePositions();
   const { toast } = useToast();
   const confirm = useConfirm();
-  const [showNew, setShowNew] = useState(false);
   const [showCsvImport, setShowCsvImport] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  function handleCreate(ticker: string, strategy: Strategy, notes: string) {
-    const p = addPosition(ticker, strategy, notes);
-    setShowNew(false);
-    onPositionCreated(p.id);
-  }
+  // Distinct accounts seen across all positions, for the filter dropdown.
+  const accounts = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of positions) set.add(p.account ?? NO_ACCOUNT);
+    return [...set].sort();
+  }, [positions]);
+
+  // Reset to "All Accounts" if the selected account no longer exists (e.g.
+  // its last position got deleted) rather than silently showing zero rows.
+  useEffect(() => {
+    if (accountFilter !== ALL_ACCOUNTS && !accounts.includes(accountFilter)) {
+      setAccountFilter(ALL_ACCOUNTS);
+    }
+  }, [accountFilter, accounts, setAccountFilter]);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowMenu(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showMenu]);
 
   async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -48,6 +78,8 @@ export default function TopBar({ onPositionCreated }: { onPositionCreated: (id: 
     }
   }
 
+  const modalRoot = document.getElementById('modal-root');
+
   return (
     <header className="topbar">
       <div className="topbar-inner">
@@ -61,49 +93,118 @@ export default function TopBar({ onPositionCreated }: { onPositionCreated: (id: 
             <p className="subtitle">Trade Tracker</p>
           </div>
         </div>
-        <div className="topbar-actions">
+        <div className="topbar-controls">
+          {showFilters && (
+            <>
+              {accounts.length > 1 && (
+                <select
+                  className="header-select"
+                  value={accountFilter}
+                  onChange={(e) => setAccountFilter(e.target.value)}
+                  title="Filter by account"
+                >
+                  <option value={ALL_ACCOUNTS}>All Accounts</option>
+                  {accounts.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <select
+                className="header-select"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                title="Filter by status"
+              >
+                <option value="all">All Positions</option>
+                <option value="open">Open Only</option>
+                <option value="closed">Closed Only</option>
+              </select>
+            </>
+          )}
           <button
-            className="btn btn-ghost"
-            title="Download all data as a JSON backup file"
-            onClick={() => {
-              exportToFile(positions);
-              toast('Backup downloaded');
-            }}
+            className="btn btn-ghost btn-icon hamburger-btn"
+            title="Menu"
+            aria-label="Open menu"
+            onClick={() => setShowMenu(true)}
           >
-            Export
-          </button>
-          <label className="btn btn-ghost" title="Restore from a JSON backup file">
-            Import
-            <input ref={fileInputRef} type="file" accept="application/json" hidden onChange={handleImport} />
-          </label>
-          <button
-            className="btn btn-ghost"
-            title="Import a Schwab transaction-history CSV export"
-            onClick={() => setShowCsvImport(true)}
-          >
-            Import CSV
-          </button>
-          <button
-            className="btn btn-ghost"
-            title="Re-check every position's transactions and fix its strategy label if it no longer fits (e.g. a short put that's been assigned and should now say Covered Call). Skips any position where you've manually picked a strategy on its detail page."
-            onClick={() => {
-              const summary = reclassifyAll();
-              toast(
-                summary.changed > 0
-                  ? `Reclassified ${summary.changed} position(s)`
-                  : 'Everything already matches its transactions'
-              );
-            }}
-          >
-            Reclassify Strategies
-          </button>
-          <button className="btn btn-primary" onClick={() => setShowNew(true)}>
-            + New Position
+            ☰
           </button>
         </div>
       </div>
-      {showNew && <NewPositionModal onClose={() => setShowNew(false)} onCreate={handleCreate} />}
+
       {showCsvImport && <ImportCsvModal onClose={() => setShowCsvImport(false)} />}
+
+      {/* Portal into #modal-root, same reason Modal.tsx does: the topbar's
+          own backdrop-filter would otherwise become the containing block for
+          a `position: fixed` drawer, boxing it into the topbar's short
+          height instead of the full viewport (see Modal.tsx's comment). */}
+      {showMenu &&
+        modalRoot &&
+        createPortal(
+          <>
+            <div className="drawer-backdrop" onClick={() => setShowMenu(false)} />
+            <nav className="drawer" aria-label="App menu">
+              <div className="drawer-header">
+                <span>Menu</span>
+                <button className="btn btn-ghost btn-icon" onClick={() => setShowMenu(false)} aria-label="Close menu">
+                  ✕
+                </button>
+              </div>
+              <button
+                className="btn btn-ghost"
+                title="Download all data as a JSON backup file"
+                onClick={() => {
+                  exportToFile(positions);
+                  toast('Backup downloaded');
+                  setShowMenu(false);
+                }}
+              >
+                Export
+              </button>
+              <label className="btn btn-ghost" title="Restore from a JSON backup file">
+                Import
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="application/json"
+                  hidden
+                  onChange={(e) => {
+                    handleImport(e);
+                    setShowMenu(false);
+                  }}
+                />
+              </label>
+              <button
+                className="btn btn-ghost"
+                title="Import a Schwab transaction-history CSV export"
+                onClick={() => {
+                  setShowCsvImport(true);
+                  setShowMenu(false);
+                }}
+              >
+                Import CSV
+              </button>
+              <button
+                className="btn btn-ghost"
+                title="Re-check every position's transactions and fix its strategy label if it no longer fits (e.g. a short put that's been assigned and should now say Covered Call). Skips any position where you've manually picked a strategy on its detail page."
+                onClick={() => {
+                  const summary = reclassifyAll();
+                  toast(
+                    summary.changed > 0
+                      ? `Reclassified ${summary.changed} position(s)`
+                      : 'Everything already matches its transactions'
+                  );
+                  setShowMenu(false);
+                }}
+              >
+                Reclassify Strategies
+              </button>
+            </nav>
+          </>,
+          modalRoot
+        )}
     </header>
   );
 }
