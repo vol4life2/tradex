@@ -6,6 +6,7 @@ import { useConfirm } from '../context/ConfirmContext';
 import { exportToFile, importFromFile } from '../lib/storage';
 import { ALL_ACCOUNTS, NO_ACCOUNT, type StatusFilter } from '../lib/filters';
 import ImportCsvModal from './ImportCsvModal';
+import PositionSnapshotModal from './PositionSnapshotModal';
 
 export default function TopBar({
   accountFilter,
@@ -24,6 +25,7 @@ export default function TopBar({
   const { toast } = useToast();
   const confirm = useConfirm();
   const [showCsvImport, setShowCsvImport] = useState(false);
+  const [showSnapshotImport, setShowSnapshotImport] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -135,6 +137,7 @@ export default function TopBar({
       </div>
 
       {showCsvImport && <ImportCsvModal onClose={() => setShowCsvImport(false)} />}
+      {showSnapshotImport && <PositionSnapshotModal onClose={() => setShowSnapshotImport(false)} />}
 
       {/* Portal into #modal-root, same reason Modal.tsx does: the topbar's
           own backdrop-filter would otherwise become the containing block for
@@ -185,6 +188,16 @@ export default function TopBar({
                 }}
               >
                 Import CSV
+              </button>
+              <button
+                className="btn btn-ghost"
+                title="Refresh mark prices from a Schwab Position Statement or tastytrade Positions-tab export, or quickly bootstrap a new position from one (no transaction history needed)"
+                onClick={() => {
+                  setShowSnapshotImport(true);
+                  setShowMenu(false);
+                }}
+              >
+                Update from Snapshot
               </button>
               <button
                 className="btn btn-ghost"
