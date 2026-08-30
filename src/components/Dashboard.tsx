@@ -9,6 +9,7 @@ import type { Position } from '../types';
 
 const ALL_ACCOUNTS = 'all';
 const NO_ACCOUNT = '(no account)';
+type StatusFilter = 'all' | 'open' | 'closed';
 
 export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: string) => void }) {
   const { positions, deletePosition, deletePositions } = usePositions();
@@ -16,6 +17,7 @@ export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: str
   const { toast } = useToast();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [accountFilter, setAccountFilter] = useState<string>(ALL_ACCOUNTS);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
   // Distinct accounts seen across all positions, for the filter dropdown.
   const accounts = useMemo(() => {
@@ -24,12 +26,19 @@ export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: str
     return [...set].sort();
   }, [positions]);
 
-  // Positions the filter narrows down to — everything below (totals, table,
+  // Positions the filters narrow down to — everything below (totals, table,
   // select-all) works off this instead of the raw `positions` list.
   const visiblePositions = useMemo(() => {
-    if (accountFilter === ALL_ACCOUNTS) return positions;
-    return positions.filter((p) => (p.account ?? NO_ACCOUNT) === accountFilter);
-  }, [positions, accountFilter]);
+    return positions.filter((p) => {
+      if (accountFilter !== ALL_ACCOUNTS && (p.account ?? NO_ACCOUNT) !== accountFilter) return false;
+      if (statusFilter !== 'all') {
+        const isClosed = computePositionMetrics(p).fullyClosed;
+        if (statusFilter === 'open' && isClosed) return false;
+        if (statusFilter === 'closed' && !isClosed) return false;
+      }
+      return true;
+    });
+  }, [positions, accountFilter, statusFilter]);
 
   // Reset to "All Accounts" if the selected account no longer exists (e.g.
   // its last position got deleted) rather than silently showing zero rows.
@@ -112,17 +121,27 @@ export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: str
 
   return (
     <>
-      {accounts.length > 1 && (
+      {positions.length > 0 && (
         <div className="account-filter-row">
+          {accounts.length > 1 && (
+            <label className="field">
+              <span>Account</span>
+              <select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}>
+                <option value={ALL_ACCOUNTS}>All Accounts</option>
+                {accounts.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="field">
-            <span>Account</span>
-            <select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}>
-              <option value={ALL_ACCOUNTS}>All Accounts</option>
-              {accounts.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
+            <span>Status</span>
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}>
+              <option value="all">All</option>
+              <option value="open">Open Only</option>
+              <option value="closed">Closed Only</option>
             </select>
           </label>
         </div>
@@ -152,7 +171,7 @@ export default function Dashboard({ onOpenPosition }: { onOpenPosition: (id: str
         </div>
       ) : visiblePositions.length === 0 ? (
         <div className="empty-state">
-          <p>No positions for this account.</p>
+          <p>No positions match the current filter.</p>
         </div>
       ) : (
         <>

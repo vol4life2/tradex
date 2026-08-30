@@ -118,7 +118,7 @@ p { margin: 0; }
   display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 14px;
   background: var(--bg-elev-2); border: 1px solid var(--accent-dim); border-radius: 8px; font-size: 13px;
 }
-.account-filter-row { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.account-filter-row { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
 .account-filter-row .field { flex: 0 0 auto; min-width: 180px; margin-bottom: 0; }
 .ticker-cell { font-weight: 650; letter-spacing: 0.01em; }
 .position-name-subtitle { font-size: 11px; font-weight: 400; color: var(--text-faint); letter-spacing: normal; margin-top: 2px; }
